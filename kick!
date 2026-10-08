@@ -1,0 +1,145 @@
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/jadpy/suki/refs/heads/main/orion"))()
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+local GrabEvents = ReplicatedStorage:WaitForChild("GrabEvents")
+local isKickEnabled = false
+local selectedPlayerText = ""
+local defaultDistance = 15
+local maxTeleportDistance = 25
+local SpawnToyRemote = ReplicatedStorage:WaitForChild("MenuToys"):WaitForChild("SpawnToyRemoteFunction")
+local SetNetworkOwnerRemote = GrabEvents:WaitForChild("SetNetworkOwner")
+local kickState = {
+    enabled = false
+}
+local targetState = {
+    targetName = nil,
+}
+local connections = {}
+local isSpawningPallet = false
+
+-- === 랙 방식 ===
+local running = false
+local createLineRemote = GrabEvents:FindFirstChild("CreateGrabLine")
+
+-- 플레이어 목록 가져오기 함수
+local function getPlayerList()
+    local playerNames = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            table.insert(playerNames, player.DisplayName .. " (@" .. player.Name .. ")")
+        end
+    end
+    return playerNames
+end
+
+-- 드롭다운 텍스트로 플레이어 객체 찾기
+local function getPlayerFromText(playerText)
+    for _, player in ipairs(Players:GetPlayers()) do
+        local formattedText = player.DisplayName .. " (@" .. player.Name .. ")"
+        if formattedText == playerText then return player end
+    end
+    return nil
+end
+
+-- 타겟 근처로 순간이동 및 네트워크 오너십 요청
+local function claimNetworkOwnership(targetPlayer, myRootPart)
+    if not targetPlayer.Character then return end
+    local targetRootPart = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRootPart or not myRootPart then return end
+    local originalCFrame = myRootPart.CFrame
+    myRootPart.CFrame = targetRootPart.CFrame * CFrame.new(0, 0, 2)
+
+    for i = 1, 15 do
+        SetNetworkOwnerRemote:FireServer(targetRootPart, targetRootPart.CFrame)
+        task.wait()
+    end
+
+    myRootPart.CFrame = originalCFrame
+end
+
+-- 자식 오브젝트 찾기 도우미 함수
+local function findOrWaitForChild(parent, childName, timeOut)
+    return parent:FindFirstChild(childName) or parent:WaitForChild(childName, timeOut or 5)
+end
+
+-- 네트워크 오너십 전송
+local function syncPartOwnership(part)
+    if part and part:IsA("BasePart") then
+        SetNetworkOwnerRemote:FireServer(part, part.CFrame)
+        task.wait()
+    end
+end
+
+-- 자식 존재 여부 확인
+local function hasChild(parent, childName)
+    return parent:FindFirstChild(childName) ~= nil
+end
+
+-- 장난감(팔레트) 스폰 함수
+local function spawnToy(toyName)
+    local myCharacter = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local myRootPart = myCharacter:WaitForChild("HumanoidRootPart")
+    local waitCount = 0
+    while (LocalPlayer.InPlot.Value and not LocalPlayer.InOwnedPlot.Value) and waitCount < 50 do
+        task.wait(0.1)
+        waitCount = waitCount + 1
+    end
+    waitCount = 0
+    while not LocalPlayer.CanSpawnToy.Value and waitCount < 50 do
+        task.wait(0.1)
+        waitCount = waitCount + 1
+    end
+
+    local spawnCFrame = myRootPart.CFrame * CFrame.new(0, 14, 20)
+
+    local spawnFolder = workspace:FindFirstChild(LocalPlayer.Name .. "SpawnedInToys")
+    if not spawnFolder then
+        spawnFolder = workspace:FindFirstChild("PlotItems")
+        if spawnFolder then
+            spawnFolder = spawnFolder:FindFirstChild("Plot1")
+        end
+    end
+    if not spawnFolder then
+        spawnFolder = workspace
+    end
+
+    local spawnedToy = nil
+    local childAddedConnection = spawnFolder.ChildAdded:Connect(function(child)
+        if child.Name == toyName then
+            spawnedToy = child
+        end
+    end)
+
+    task.spawn(function()
+        pcall(function()
+            SpawnToyRemote:InvokeServer(toyName, spawnCFrame, Vector3.zero)
+        end)
+    end)
+
+    local startTime = tick()
+    repeat task.wait(0.05) until spawnedToy or (tick() - startTime) > 5
+    childAddedConnection:Disconnect()
+    return spawnedToy
+end
+
+-- 래그돌 유발용 팔레트 스폰 및 설정
+local function createRagdollPallet()
+    if isSpawningPallet then return nil end
+    isSpawningPallet = true
+    local palletModel = spawnToy("PalletLightBrown")
+    if not palletModel then
+        isSpawningPallet = false
+        return nil
+    end
+
+    local soundPart = findOrWaitForChild(palletModel, "SoundPart", 3)
+    if not soundPart then
+        palletModel:Destroy()
+        isSpawningPallet = false
+        return nil
+    end
+
+    local
